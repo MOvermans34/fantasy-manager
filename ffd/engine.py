@@ -3,7 +3,6 @@ Engine: haalt alle league-data op, combineert die en ververst op de achtergrond.
 
 Eén engine bedient de hele league; elk API-verzoek kiest een team (team_id).
 """
-import concurrent.futures
 import datetime as dt
 import math
 import os
@@ -67,10 +66,12 @@ class Engine:
         self.errors = []
 
     # ------------------------------------------------------------------
-    def _err(self, where, e):
+    def _err(self, where, e, level="error"):
+        """level 'error' = zichtbaar in de app (bijv. cookie verlopen); 'warn' = alleen in de log."""
         msg = f"{where}: {e}"
-        self.log("FOUT " + msg)
-        self.errors = (self.errors + [{"at": now_iso(), "msg": msg}])[-10:]
+        self.log(("FOUT " if level == "error" else "LET OP ") + msg)
+        if level == "error":
+            self.errors = (self.errors + [{"at": now_iso(), "msg": msg}])[-10:]
 
     def team_ok(self, tid):
         return tid in self.fantasy_teams
@@ -265,32 +266,50 @@ class Engine:
         with self.lock:
             rostered = {r["id"] for ro in self.rosters.values() for r in ro}
             players = dict(self.players)
-        # Alleen spelers met nieuw nieuws sinds de vorige keer (ESPN lastNewsDate)
-        todo = [pid for pid in rostered if pid > 0 and players.get(pid)
-                and players[pid].get("lastNews") != self._news_seen.get(pid)]
+        # Alleen spelers met nieuw nieuws sinds de vorige keer (ESPN lastNewsDate),
+        # meest recente eerst en per ronde beperkt. Bij 403/429 respecteren we de
+        # limiet van ESPN: stoppen en pas na een (oplopende) wachttijd opnieuw.
+        todo = sorted([pid for pid in rostered if pid > 0 and players.get(pid)
+                       and players[pid].get("lastNews") != self._news_seen.get(pid)],
+                      key=lambda pid: -(players[pid].get("lastNews") or 0))
+        if time.time() < getattr(self, "_news_backoff_until", 0):
+            todo = []
+        batch = int(self.cfg.get("news_batch", 20))
         limit = int(self.cfg.get("news_per_player", 8))
-        items = []
-        with concurrent.futures.ThreadPoolExecutor(8) as ex:
-            futs = {ex.submit(self.espn.news, pid, limit): pid for pid in todo}
-            for f in concurrent.futures.as_completed(futs):
-                pid = futs[f]
-                try:
-                    for it in f.result():
-                        it["player_ids"] = [pid]
-                        items.append(it)
-                    self._news_seen[pid] = players[pid].get("lastNews")
-                except Exception as e:
-                    self._err("ESPN-nieuws", e)
+        items, done = [], 0
+        for pid in todo[:batch]:  # één voor één, met pauze
+            try:
+                res = self.espn.news(pid, limit)
+            except Exception as e:
+                code = getattr(e, "code", None)
+                if code in (403, 429):
+                    self._news_backoff = min(3600, getattr(self, "_news_backoff", 300) * 2)
+                    self._news_backoff_until = time.time() + self._news_backoff
+                    self._err("ESPN-nieuws", f"limiet bereikt ({code}); opnieuw over "
+                              f"{self._news_backoff // 60} min", "warn")
+                    break
+                self._err("ESPN-nieuws", e, "warn")
+                continue
+            for it in res:
+                it["player_ids"] = [pid]
+                items.append(it)
+            self._news_seen[pid] = players[pid].get("lastNews")
+            done += 1
+            time.sleep(1.0)
+        else:
+            if done:
+                self._news_backoff = 300
         name_to_ids = {}
         for p in players.values():
             name_to_ids.setdefault(norm_name(p["name"]), []).append(p["id"])
         try:
             items += match_rotowire(fetch_rotowire(), name_to_ids)
         except Exception as e:
-            self._err("Rotowire", e)
+            self._err("Rotowire", e, "warn")
         new = self.news.add(items)
         self.news.save()
-        self.log(f"Nieuws: {len(todo)} spelers bijgewerkt, {new} nieuwe items.")
+        self.log(f"Nieuws: {done} spelers bijgewerkt ({max(0, len(todo) - done)} in de wachtrij), "
+                 f"{new} nieuwe items.")
 
     # ------------------------------------------------------------------
     # Live (voor alle spelers in de league tegelijk)
@@ -307,7 +326,7 @@ class Engine:
         try:
             games = parse_scoreboard(self.espn.scoreboard(week))
         except Exception as e:
-            self._err("Scoreboard", e)
+            self._err("Scoreboard", e, "warn")
             games = {}
         stamp = now_iso()
         events = []
@@ -493,6 +512,13 @@ class Engine:
             traceback.print_exc()
         return None
 
+    def _news_async(self):
+        """Nieuws in een eigen thread (duurt even door de pauzes); nooit twee tegelijk."""
+        if getattr(self, "_news_thread", None) and self._news_thread.is_alive():
+            return
+        self._news_thread = threading.Thread(target=lambda: self._safe("Nieuws", self.refresh_news), daemon=True)
+        self._news_thread.start()
+
     def _loop(self):
         while not self.players:
             self._safe("ESPN", self.refresh_fantasy)
@@ -505,7 +531,7 @@ class Engine:
         else:
             self.log(f"Analytics uit cache geladen (t/m week {self.analytics.max_week}).")
         self._safe("Live", self.refresh_live)
-        self._safe("Nieuws", self.refresh_news)
+        self._news_async()
         t = {k: time.time() for k in ("fantasy", "news", "live")}
         t["analytics"] = time.time() - (0 if not self.analytics.ready else min(self._analytics_age(), a_iv))
         live_fast = self.any_live
@@ -517,7 +543,7 @@ class Engine:
                 live_fast = bool(self._safe("Live", self.refresh_live))
             if now - t["news"] >= iv.get("news_seconds", 300):
                 t["news"] = now
-                self._safe("Nieuws", self.refresh_news)
+                self._news_async()
             if now - t["fantasy"] >= iv.get("fantasy_seconds", 900):
                 t["fantasy"] = now
                 self._safe("ESPN", self.refresh_fantasy)
