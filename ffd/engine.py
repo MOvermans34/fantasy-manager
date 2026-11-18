@@ -48,7 +48,12 @@ class Engine:
         except Exception as e:  # beschadigd bestand: opnieuw bouwen
             log(f"Analytics-cache onleesbaar ({e}); wordt opnieuw gebouwd.")
             self.analytics = AnalyticsResult()
-        self.news = NewsStore(os.path.join(data_dir, "news.json"))
+        json_path = os.path.join(data_dir, "news.json")
+        if cfg.get("database_url"):
+            from .etl_news import PostgresNewsStore  # Polars/psycopg alleen laden als nodig
+            self.news = PostgresNewsStore(cfg["database_url"], log=log, legacy_json=json_path)
+        else:
+            self.news = NewsStore(json_path)
         self.lock = threading.RLock()
         self.heavy = threading.Lock()   # zware taken (ESPN-pool, analytics) nooit tegelijk: geheugen
         self.players = {}        # id -> espn-speler (volledige pool)
@@ -276,7 +281,7 @@ class Engine:
             todo = []
         batch = int(self.cfg.get("news_batch", 20))
         limit = int(self.cfg.get("news_per_player", 8))
-        items, done = [], 0
+        items, done, seen, warns = [], 0, {}, []
         for pid in todo[:batch]:  # één voor één, met pauze
             try:
                 res = self.espn.news(pid, limit)
@@ -285,15 +290,16 @@ class Engine:
                 if code in (403, 429):
                     self._news_backoff = min(3600, getattr(self, "_news_backoff", 300) * 2)
                     self._news_backoff_until = time.time() + self._news_backoff
-                    self._err("ESPN-nieuws", f"limiet bereikt ({code}); opnieuw over "
-                              f"{self._news_backoff // 60} min", "warn")
+                    warns.append(f"ESPN limiet bereikt ({code}); opnieuw over {self._news_backoff // 60} min")
+                    self._err("ESPN-nieuws", warns[-1], "warn")
                     break
+                warns.append(f"ESPN {pid}: {e}")
                 self._err("ESPN-nieuws", e, "warn")
                 continue
             for it in res:
                 it["player_ids"] = [pid]
                 items.append(it)
-            self._news_seen[pid] = players[pid].get("lastNews")
+            seen[pid] = players[pid].get("lastNews")
             done += 1
             time.sleep(1.0)
         else:
@@ -305,9 +311,13 @@ class Engine:
         try:
             items += match_rotowire(fetch_rotowire(), name_to_ids)
         except Exception as e:
+            warns.append(f"Rotowire: {e}")
             self._err("Rotowire", e, "warn")
-        new = self.news.add(items)
-        self.news.save()
+        # Load (Postgres of JSON). Pas na een geslaagde load markeren we spelers als
+        # bijgewerkt, zodat een mislukte load bij de volgende ronde opnieuw gaat.
+        new = self.news.ingest(items, players=players, extracted=len(items),
+                               message="; ".join(warns) or None)
+        self._news_seen.update(seen)
         self.log(f"Nieuws: {done} spelers bijgewerkt ({max(0, len(todo) - done)} in de wachtrij), "
                  f"{new} nieuwe items.")
 
@@ -494,7 +504,13 @@ class Engine:
             roster, opp, _ = self.ctx(tid)
         return {"mine": self.news.for_players([r["id"] for r in roster], 200),
                 "opp": self.news.for_players([r["id"] for r in opp], 60),
-                "latest": self.news.latest(80)}
+                "latest": self.news.latest(80), "etl": self._etl_status()}
+
+    def _etl_status(self):
+        try:
+            return self.news.etl_status(3)
+        except Exception as e:
+            return {"backend": "onbekend", "error": str(e)}
 
     # ------------------------------------------------------------------
     # Achtergrondlus

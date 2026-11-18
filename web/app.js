@@ -786,7 +786,16 @@ function viewNews() {
       <span class="sub">${items.length} items</span></div>
     ${scope !== "all" ? `<div class="panel-b"><div class="pchips">${ro.map(p => `<button class="pchip" data-pid="${p.id}" aria-pressed="${sel.has(p.id)}">${esc(p.name)}</button>`).join("")}</div></div>` : ""}
     ${newsList(items.slice(0, 150), true)}</div>
-    <footer class="foot">Bronnen: ESPN-artikelen en -analyses, Rotowire-spelersupdates (via ESPN en de Rotowire-RSS-feed). Nieuws wordt elke 5 minuten opgehaald en lokaal bewaard in data/news.json.</footer>`;
+    <footer class="foot">Bronnen: ESPN-artikelen en -analyses, Rotowire-spelersupdates (via ESPN en de Rotowire-RSS-feed). ${etlLine(S.news.etl)}</footer>`;
+}
+function etlLine(e) {
+  if (!e) return "";
+  const r = (e.runs || [])[0], t = e.totals || {};
+  const where = e.backend === "postgres" ? "Postgres" : e.backend === "json" ? "lokaal JSON-bestand" : e.backend;
+  let txt = `Opslag: ${esc(where)}${num(t.items) ? ` · ${f0(t.items)} artikelen${num(t.links) ? `, ${f0(t.links)} spelerkoppelingen` : ""}` : ""}.`;
+  if (r) txt += ` Laatste ETL-run${r.started ? ` (${ago(r.started)})` : ""}: ${esc(r.status)}, ${r.extracted ?? "–"} opgehaald, ${r.loaded_items ?? 0} nieuw${num(r.seconds) ? ` (${r.seconds}s)` : ""}.`;
+  if (r && r.message) txt += ` <span data-tip="${esc(r.message)}">⚠ waarschuwing</span>`;
+  return txt;
 }
 
 /* ================= LEAGUE ================= */

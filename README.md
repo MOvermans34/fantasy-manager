@@ -137,6 +137,53 @@ Laat de app tijdens de wedstrijden gewoon draaien. Hij ververst vanzelf:
 
 De intervallen pas je aan in `config.json` onder `intervals`.
 
+## Nieuws-ETL (Postgres + Polars)
+
+Met `DATABASE_URL` ingesteld draait het nieuws via een ETL-pijplijn:
+
+| Stap | Wat er gebeurt |
+|---|---|
+| **Extract** | ESPN-spelersnieuws (alleen spelers met nieuw nieuws, max. 20 per ronde, ESPN-limieten gerespecteerd) en de Rotowire-RSS-feed. Dit gebeurt elke 5 minuten. |
+| **Transform** (Polars) | opschonen, ontdubbelen op bron-id, tijden naar UTC, koppelen aan spelers en verrijken met naam, positie en NFL-team |
+| **Load** (Postgres) | via `COPY` in een staging-tabel en daarna `INSERT … ON CONFLICT DO NOTHING`. Dat is idempotent: een run twee keer draaien geeft geen dubbele rijen. |
+| **Lezen** (Polars) | de app haalt het nieuws op met `pl.read_database` en houdt het 30 seconden in de cache |
+
+Tabellen (worden automatisch aangemaakt):
+
+| Tabel | Inhoud |
+|---|---|
+| `news_item` | één rij per artikel of update: bron, soort, auteur, kop, beschrijving, link, `published_at`, `first_seen_at` |
+| `news_player` | koppeling tussen artikel en speler, met spelernaam, positie en team |
+| `etl_run` | logboek per run: aantal opgehaald, nieuw geladen, duur, status en eventuele waarschuwing |
+
+Een bestaand `data/news.json` wordt bij de eerste start eenmalig geïmporteerd. De status van de laatste run staat onderaan het nieuwsscherm in de app.
+
+Voorbeeldvragen in SQL:
+
+```sql
+-- welke spelers zijn het meest in het nieuws?
+SELECT player_name, pos, pro_team, count(*) FROM news_player GROUP BY 1, 2, 3 ORDER BY 4 DESC LIMIT 10;
+-- hoe gaan de ETL-runs?
+SELECT started_at, status, extracted, loaded_items, message FROM etl_run ORDER BY id DESC LIMIT 20;
+```
+
+Of met Polars, bijvoorbeeld in een notebook:
+
+```python
+import polars as pl
+df = pl.read_database_uri("SELECT * FROM news_item", uri="postgresql://…")  # vereist connectorx
+```
+
+Een losse run zonder webserver, bijvoorbeeld als cron job:
+
+```bash
+DATABASE_URL=postgresql://… python -m ffd.etl_news
+```
+
+Zonder `DATABASE_URL` gebruikt de app gewoon het lokale `data/news.json`, en worden Polars en psycopg niet geladen.
+
+**Op Render** maakt de Blueprint de database `fantasy-db` aan en koppelt hem automatisch via `DATABASE_URL`. Let op: een **gratis** Render-database wordt 30 dagen na aanmaak verwijderd. Voor blijvende opslag kies je `basic-256mb` (~$6 per maand) of een gratis externe Postgres (zoals Neon). Bij die laatste zet je `DATABASE_URL` handmatig in de service.
+
 ## Databronnen
 
 | Bron | Wat |

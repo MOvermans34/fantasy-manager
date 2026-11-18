@@ -82,6 +82,20 @@ class NewsStore:
             json.dump(lst, f, ensure_ascii=False)
         os.replace(tmp, self.path)
 
+    def ingest(self, items, players=None, extracted=None, message=None, job="news"):
+        """Zelfde interface als PostgresNewsStore: laden + opslaan."""
+        new = self.add(items)
+        self.save()
+        self.last_run = {"job": job, "status": "ok", "extracted": extracted if extracted is not None else len(items),
+                         "loaded_items": new, "message": message}
+        return new
+
+    def etl_status(self, n=5):
+        with self.lock:
+            total = len(self.items)
+        run = getattr(self, "last_run", None)
+        return {"backend": "json", "runs": [run] if run else [], "totals": {"items": total}}
+
     def for_players(self, ids, limit=150):
         ids = set(ids)
         with self.lock:
