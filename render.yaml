@@ -1,0 +1,33 @@
+# Render Blueprint voor Fantasy Manager
+# Render-dashboard -> New -> Blueprint -> kies deze repo. Render vraagt dan om de
+# waarden met "sync: false" (je ESPN-cookies en de toegangscode).
+services:
+  - type: web
+    name: fantasy-manager
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: frankfurt
+    # free: gratis, maar valt na 15 min zonder bezoek in slaap (wakker worden ~1 min).
+    # starter ($7/mnd): altijd aan, live tracking ook als niemand de app open heeft.
+    plan: free
+    healthCheckPath: /api/config
+    autoDeploy: true
+    envVars:
+      - key: LEAGUE_ID
+        value: "519181463"
+      - key: TEAM_ID
+        value: "2"
+      - key: SEASON
+        value: "2026"
+      - key: ESPN_S2
+        sync: false
+      - key: ESPN_SWID
+        sync: false
+      - key: ACCESS_CODE
+        sync: false
+    # Optioneel (alleen betaalde plannen): bewaart nieuwsgeschiedenis en data-cache
+    # tussen herstarts en deploys.
+    # disk:
+    #   name: data
+    #   mountPath: /data
+    #   sizeGB: 1
