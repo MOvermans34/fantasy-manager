@@ -80,9 +80,16 @@ class Espn:
                f"?view=mTeam&view=mRoster&view=mSettings&view=mMatchup&scoringPeriodId={week}")
         return self.get(url)
 
-    @staticmethod
-    def _filter(slot_ids=None, limit=None, ids=None):
-        f = {}
+    def _filter(self, slot_ids=None, limit=None, ids=None):
+        # Het league-endpoint stuurt weekpunten en weekprojecties alleen mee als je
+        # ze expliciet opvraagt: top-18 speelrondes (gescoorde punten per week) plus
+        # seizoenstotalen en de projectie per week ("11{seizoen}{week}").
+        y = self.season
+        f = {"filterStatsForTopScoringPeriodIds": {
+            "value": 18,
+            "additionalValue": [f"00{y}", f"10{y}", f"00{y - 1}", f"10{y - 1}"]
+                               + [f"11{y}{w}" for w in range(1, 19)],
+        }}
         if ids is not None:
             f["filterIds"] = {"value": ids}
         if slot_ids is not None:
