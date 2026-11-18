@@ -146,6 +146,27 @@ def r1(x):
     return None if x is None else round(x, 1)
 
 
+def scoring_table(settings):
+    """League-scoringsregels uit mSettings: statId -> (punten, {slotId: afwijkende punten})."""
+    items = (((settings or {}).get("scoringSettings") or {}).get("scoringItems")) or []
+    table = {}
+    for it in items:
+        ov = {int(k): v for k, v in (it.get("pointsOverrides") or {}).items()}
+        table[str(it.get("statId"))] = (it.get("points") or 0.0, ov)
+    return table
+
+
+def score_stats(stats, table, slot):
+    """Fantasy-punten van een (ruwe) statregel volgens de league-scoring."""
+    total = 0.0
+    for sid, v in (stats or {}).items():
+        t = table.get(str(sid))
+        if t and v:
+            pts, ov = t
+            total += v * ov.get(slot, pts)
+    return total
+
+
 def stat_index(player, season):
     idx = {}
     for s in player.get("stats", []):

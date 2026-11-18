@@ -12,8 +12,8 @@ import threading
 import time
 import traceback
 
-from .espn import (KEY_STATS, SLOT, AuthError, Espn, build_player, live_line,
-                   parse_scoreboard)
+from .espn import (KEY_STATS, POS, POS_SLOT, SLOT, AuthError, Espn, build_player, live_line,
+                   parse_scoreboard, score_stats, scoring_table, stat_index)
 from .model import AnalyticsResult
 from .news import NewsStore, fetch_rotowire, match_rotowire, norm_name
 
@@ -130,12 +130,16 @@ class Engine:
                     pairs[h], pairs[a] = a, h
             ids = [r["id"] for ro in rosters.values() for r in ro]
             raw = self.espn.players(self.league_id, week, ids)
+            table = scoring_table(ld.get("settings"))
 
         players = {}
         for e in raw:
             p = build_player(e, self.season, week, pro)
             if p["pos"]:
                 players[p["id"]] = p
+
+        if not self.demo:
+            meta["projCheck"] = self._fill_past_projections(players, raw, table, week)
 
         if self.demo:
             fantasy_teams, rosters, pairs = self._demo_league(players)
@@ -181,6 +185,55 @@ class Engine:
             self.week = week
             self._summ = {}
         self.log(f"ESPN: week {week}, {len(players)} spelers, {len(fantasy_teams)} teams.")
+
+    def _fill_past_projections(self, players, raw, table, week):
+        """Vul ontbrekende projecties van afgelopen weken aan.
+
+        Het league-endpoint geeft voor een privé-league alleen de projectie van de
+        huidige week. De openbare ESPN-data heeft de oude weekprojecties wél (als
+        ruwe statregels); die rekenen we om met de scoringsregels van de league.
+        Eerst controleren we de rekenregel op de échte weekpunten van de league:
+        alleen als die (bijna) overal klopt, worden de projecties ingevuld.
+        """
+        if not table:
+            return None
+        diffs = []
+        for e in raw:
+            pl = e["player"]
+            slot = POS_SLOT.get(POS.get(pl.get("defaultPositionId")))
+            for (w, src, spl), st in stat_index(pl, self.season).items():
+                if src == 0 and spl == 1 and w and st.get("stats") and st.get("appliedTotal") is not None:
+                    diffs.append(abs(score_stats(st["stats"], table, slot) - st["appliedTotal"]))
+        if len(diffs) < 30:
+            self.log("Projecties: te weinig data om de league-scoring te controleren; niet ingevuld.")
+            return None
+        rate = sum(1 for d in diffs if d <= 0.2) / len(diffs)
+        if rate < 0.9:
+            self.log(f"Projecties: league-scoring niet betrouwbaar na te rekenen ({rate:.0%} klopt); niet ingevuld.")
+            return {"rate": round(rate, 3), "filled": 0}
+        need = [pid for pid, p in players.items()
+                if any(w["proj"] is None and not w["bye"] for w in p["weekly"])]
+        filled = 0
+        for i in range(0, len(need), 150):
+            try:
+                pub = self.espn.players_by_id(None, week, need[i:i + 150])
+            except Exception as e:
+                self._err("Projecties", e, "warn")
+                break
+            for e in pub:
+                p = players.get(e["player"]["id"])
+                if not p:
+                    continue
+                idx, slot = stat_index(e["player"], self.season), POS_SLOT.get(p["pos"])
+                for w in p["weekly"]:
+                    if w["proj"] is None and not w["bye"]:
+                        st = idx.get((w["wk"], 1, 1))
+                        if st is not None:  # lege statregel = 0 geprojecteerd (bijv. geblesseerd)
+                            w["proj"] = round(score_stats(st.get("stats") or {}, table, slot), 1)
+                            filled += 1
+        self.log(f"Projecties: {filled} weekprojecties omgerekend naar league-scoring "
+                 f"(controle: {rate:.0%} van {len(diffs)} weekscores exact nagerekend).")
+        return {"rate": round(rate, 3), "filled": filled}
 
     def _demo_league(self, players):
         """Snake-draft van 8 demoteams uit de openbare spelerspool."""
