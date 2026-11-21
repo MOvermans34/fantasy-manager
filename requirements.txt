@@ -3,3 +3,4 @@ pyarrow>=14.0
 polars>=1.0
 psycopg[binary]>=3.1
 Pillow>=10.0
+cairosvg>=2.7

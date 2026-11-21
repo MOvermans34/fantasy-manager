@@ -80,10 +80,45 @@ def fit_lightness(rgb, ok, darker=True, steps=100):
 # ----------------------------------------------------------------------
 # Kleuren uit een logo
 # ----------------------------------------------------------------------
+class LogoError(Exception):
+    """Logo onbruikbaar; de melding zegt waarom (komt in de log)."""
+
+
+def sniff(data):
+    """Bepaal het formaat aan de inhoud, niet aan wat de server opgeeft."""
+    head = (data or b"")[:2048].lstrip()
+    if head.startswith(b"\x89PNG") or head.startswith(b"\xff\xd8") or head.startswith(b"GIF8") \
+            or (head.startswith(b"RIFF") and head[8:12] == b"WEBP") or head.startswith(b"BM"):
+        return "raster"
+    low = head.lower()
+    if low.startswith(b"<svg") or (low.startswith(b"<?xml") and b"<svg" in low) or b"<svg" in low[:400]:
+        return "svg"
+    return None
+
+
+def svg_to_png(data, size=192):
+    """SVG renderen zonder iets van buiten op te halen.
+
+    unsafe=False: cairosvg laadt dan alleen inline data:-inhoud (externe
+    afbeeldingen/URL's worden een lege afbeelding), geen lokale bestanden,
+    geen XML-entities en geen extreem grote bestanden.
+    """
+    import cairosvg  # alleen laden als er SVG-logo's zijn
+    try:
+        return cairosvg.svg2png(bytestring=data, output_width=size, output_height=size, unsafe=False)
+    except Exception as e:
+        raise LogoError(f"SVG niet te lezen ({type(e).__name__})")
+
+
 def dominant_colors(data):
     """Geef de (max. 2) kenmerkende kleuren van een logo als RGB-tuples."""
     from PIL import Image  # alleen laden als er logo's zijn
 
+    kind = sniff(data)
+    if kind == "svg":
+        data = svg_to_png(data)
+    elif kind is None:
+        raise LogoError("geen herkenbare afbeelding (geen PNG/JPG/GIF/WEBP/SVG)")
     img = Image.open(io.BytesIO(data))
     img.draft("RGB", (128, 128))
     img = img.convert("RGBA")
@@ -143,14 +178,26 @@ _OPENER = urllib.request.build_opener(_SafeRedirect)
 
 
 def fetch_logo(url, timeout=6):
-    if not url or not _public_https(url):
+    if not url:
         return None
-    req = urllib.request.Request(url, headers={"User-Agent": "ff-dashboard/3.0", "Accept": "image/*"})
+    u = urllib.parse.urlparse(url)
+    if u.scheme != "https" or not u.hostname:
+        raise LogoError("geen https-adres")
+    try:
+        socket.getaddrinfo(u.hostname, 443)
+    except OSError:
+        raise LogoError(f"adres {u.hostname} niet te vinden (DNS)")
+    if not _public_https(url):
+        raise LogoError("intern/niet-publiek adres geweigerd")
+    req = urllib.request.Request(url, headers={"User-Agent": "ff-dashboard/3.0",
+                                               "Accept": "image/svg+xml,image/*;q=0.9,*/*;q=0.5"})
     with _OPENER.open(req, timeout=timeout) as r:
-        if not (r.headers.get("Content-Type") or "image/").startswith("image/"):
-            return None
         data = r.read(MAX_BYTES + 1)
-    return data if len(data) <= MAX_BYTES else None
+    if len(data) > MAX_BYTES:
+        raise LogoError("bestand groter dan 2 MB")
+    if not sniff(data):  # bijv. een HTML-pagina i.p.v. een afbeelding
+        raise LogoError(f"geen afbeelding (Content-Type {r.headers.get('Content-Type')})")
+    return data
 
 
 # ----------------------------------------------------------------------

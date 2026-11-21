@@ -211,8 +211,15 @@ class Engine:
         """Haal logo's op die nog geen palet hebben en bepaal hun kleuren."""
         from .palette import fetch_logo, palette_from_bytes
         with self.lock:
-            todo = {t.get("logo") for t in self.fantasy_teams.values()
-                    if t.get("logo") and t.get("logo") not in self.palettes}
+            teams_by_url = {}
+            for t in self.fantasy_teams.values():
+                if t.get("logo") and t.get("logo") not in self.palettes:
+                    teams_by_url.setdefault(t["logo"], []).append(t.get("name") or str(t["id"]))
+            no_logo = [t.get("name") for t in self.fantasy_teams.values() if not t.get("logo")]
+        if no_logo and not getattr(self, "_logged_no_logo", False):
+            self._logged_no_logo = True
+            self.log(f"Teamkleuren: geen logo ingesteld voor {', '.join(no_logo)}; kleur op basis van de naam.")
+        todo = list(teams_by_url)
         if not todo:
             return
         changed = 0
@@ -225,7 +232,9 @@ class Engine:
                     data = fetch_logo(url)
                 pal = palette_from_bytes(data) if data else None
             except Exception as e:
-                self._err("Teamlogo", f"{url[:80]}: {e}", "warn")
+                code = getattr(e, "code", None)
+                why = f"HTTP {code}" if code else str(e)
+                self._err("Teamlogo", f"{', '.join(teams_by_url[url])}: {why} ({url[:100]})", "warn")
                 pal = None
             if pal:
                 self.palettes[url] = pal
@@ -240,7 +249,8 @@ class Engine:
                 os.replace(self.palette_path + ".tmp", self.palette_path)
             except OSError:
                 pass
-        self.log(f"Teamkleuren: {changed} van {len(todo)} logo's verwerkt.")
+        self.log(f"Teamkleuren: {changed} van {len(todo)} logo's verwerkt"
+                 + ("." if changed == len(todo) else "; de rest krijgt een kleur op basis van de naam."))
 
     def _fill_past_projections(self, players, raw, table, week):
         """Vul ontbrekende projecties van afgelopen weken aan.
