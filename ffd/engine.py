@@ -4,6 +4,7 @@ Engine: haalt alle league-data op, combineert die en ververst op de achtergrond.
 Eén engine bedient de hele league; elk API-verzoek kiest een team (team_id).
 """
 import datetime as dt
+import json
 import math
 import os
 import subprocess
@@ -42,6 +43,9 @@ class Engine:
         self.default_team = int(cfg["team_id"]) if cfg.get("team_id") and not demo else 1
         self.espn = Espn(self.season, cfg.get("espn_s2"), cfg.get("swid"))
         self.cache_dir = os.path.join(data_dir, "cache")
+        self.web_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
+        self.palette_path = os.path.join(data_dir, "palettes.json")
+        self.palettes = self._load_palettes()
         self.analytics_path = os.path.join(data_dir, f"analytics_{self.season}.json")
         try:
             self.analytics = AnalyticsResult.load(self.analytics_path)
@@ -180,11 +184,63 @@ class Engine:
             self.pro = pro
             self.players = players
             self.rosters, self.pairs = rosters, pairs
+            for t in fantasy_teams.values():  # direct een palet (uit cache of op naam)
+                t["palette"] = self._palette_now(t)
             self.fantasy_teams = fantasy_teams
             self.meta = meta
             self.week = week
             self._summ = {}
         self.log(f"ESPN: week {week}, {len(players)} spelers, {len(fantasy_teams)} teams.")
+        threading.Thread(target=lambda: self._safe("Teamkleuren", self.refresh_palettes), daemon=True).start()
+
+    # ------------------------------------------------------------------
+    # Teamkleuren (uit het logo)
+    # ------------------------------------------------------------------
+    def _load_palettes(self):
+        try:
+            with open(self.palette_path, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def _palette_now(self, team):
+        from .palette import fallback_palette
+        return self.palettes.get(team.get("logo") or "") or fallback_palette(team.get("name") or team["id"])
+
+    def refresh_palettes(self):
+        """Haal logo's op die nog geen palet hebben en bepaal hun kleuren."""
+        from .palette import fetch_logo, palette_from_bytes
+        with self.lock:
+            todo = {t.get("logo") for t in self.fantasy_teams.values()
+                    if t.get("logo") and t.get("logo") not in self.palettes}
+        if not todo:
+            return
+        changed = 0
+        for url in todo:
+            try:
+                if url.startswith("/demo-logos/"):  # demo: meegeleverde logo's
+                    with open(os.path.join(self.web_dir, url.lstrip("/")), "rb") as f:
+                        data = f.read()
+                else:
+                    data = fetch_logo(url)
+                pal = palette_from_bytes(data) if data else None
+            except Exception as e:
+                self._err("Teamlogo", f"{url[:80]}: {e}", "warn")
+                pal = None
+            if pal:
+                self.palettes[url] = pal
+                changed += 1
+        if changed:
+            with self.lock:
+                for t in self.fantasy_teams.values():
+                    t["palette"] = self._palette_now(t)
+            try:
+                with open(self.palette_path + ".tmp", "w", encoding="utf-8") as f:
+                    json.dump(self.palettes, f)
+                os.replace(self.palette_path + ".tmp", self.palette_path)
+            except OSError:
+                pass
+        self.log(f"Teamkleuren: {changed} van {len(todo)} logo's verwerkt.")
 
     def _fill_past_projections(self, players, raw, table, week):
         """Vul ontbrekende projecties van afgelopen weken aan.
@@ -255,7 +311,7 @@ class Engine:
         recs = [(7, 3), (6, 4), (6, 4), (5, 5), (5, 5), (4, 6), (4, 6), (3, 7)]
         teams = {tid: {"id": tid, "name": names[tid - 1], "abbrev": names[tid - 1][:4].upper(),
                        "owner": f"Speler {tid}", "wins": recs[tid - 1][0], "losses": recs[tid - 1][1],
-                       "ties": 0, "pf": None, "pa": None} for tid in rosters}
+                       "ties": 0, "pf": None, "pa": None, "logo": f"/demo-logos/team{tid}.png"} for tid in rosters}
         pairs = {}
         for a in range(1, len(names), 2):
             pairs[a], pairs[a + 1] = a + 1, a
@@ -480,7 +536,7 @@ class Engine:
         with self.lock:
             return {"leagueName": self.meta.get("leagueName"), "default": self.default_team,
                     "demo": self.demo,
-                    "teams": [{k: t.get(k) for k in ("id", "name", "abbrev", "owner", "wins", "losses", "ties", "logo")}
+                    "teams": [{k: t.get(k) for k in ("id", "name", "abbrev", "owner", "wins", "losses", "ties", "logo", "palette")}
                               for t in sorted(self.fantasy_teams.values(), key=lambda t: t["id"])]}
 
     def state_out(self, tid):

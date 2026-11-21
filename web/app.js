@@ -257,9 +257,35 @@ function route() {
 window.addEventListener("hashchange", () => { render(); window.scrollTo(0, 0); });
 
 const TITLES = { league: "League", overzicht: "Overzicht", selectie: "Selectie", speler: "Spelerprofiel", live: "Wedstrijdcentrum", vergelijken: "Spelersmarkt", scouting: "Scouting defenses", nieuws: "Nieuws" };
+/* ---------------- teamkleuren & logo's ---------------- */
+function logoImg(t, cls) {
+  if (!t || !t.logo) return `<span class="tdot" style="background:${esc((t && t.palette && t.palette.primary) || "var(--text-muted)")}"></span>`;
+  return `<img class="${cls}" src="${esc(t.logo)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.outerHTML='<span class=&quot;tdot&quot; style=&quot;background:${esc((t.palette && t.palette.primary) || "#888")}&quot;></span>'">`;
+}
+function applyTeamTheme(team) {
+  let el = $("#teamTheme");
+  if (!el) { el = document.createElement("style"); el.id = "teamTheme"; document.head.appendChild(el); }
+  const p = team && team.palette;
+  const bm = $(".brand-mark");
+  if (bm) {
+    if (team && team.logo) { bm.classList.add("has-logo"); bm.innerHTML = logoImg(team, "tlogo"); }
+    else { bm.classList.remove("has-logo"); bm.textContent = "FM"; }
+  }
+  if (!p) { el.textContent = ""; return; }
+  const ok = v => /^#[0-9a-f]{6}$/i.test(v || "") ? v : null;  // alleen geldige hex-kleuren in CSS
+  const common = `--sidebar:${ok(p.sidebar)};--sidebar-active:${ok(p.sidebarActive)};--on-sidebar-active:${ok(p.onSidebarActive)};--button:${ok(p.button)};--on-button:${ok(p.onButton)};`;
+  const mode = m => `--accent:${ok(m.accent)};--accent-soft:${ok(m.accentSoft)};--mine:${ok(m.mine)};--mine-edge:${ok(m.accent)};`;
+  if (![p.sidebar, p.sidebarActive, p.onSidebarActive, p.button, p.onButton, p.light.accent, p.dark.accent].every(ok)) { el.textContent = ""; return; }
+  el.textContent = `:root{${common}${mode(p.light)}}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){${common}${mode(p.dark)}}}
+:root[data-theme="dark"]{${common}${mode(p.dark)}}`;
+  const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.content = p.sidebar;
+}
+
 function renderChrome() {
   const s = S.state; if (!s) return;
   renderTeamSel();
+  applyTeamTheme(s.meta.team);
   const m = s.meta, t = m.team || {};
   $("#brandTeam").textContent = t.name || "Fantasy Manager";
   $("#brandSub").textContent = `${t.wins ?? 0}-${t.losses ?? 0}${t.ties ? "-" + t.ties : ""} · Week ${m.week}${m.demo ? " · demo" : ""}`;
@@ -817,12 +843,12 @@ async function viewLeague() {
   const started = L.started;
   const mu = L.matchups.map(m => {
     const mine = m.a === me || m.b === me;
-    const side = (id, tot, fin, wp) => `<div class="side ${id === m.b ? "r" : ""}"><div class="tn">${tn(id)}</div><div class="rec">${T[id] ? esc(T[id].owner || "") : ""}</div>
+    const side = (id, tot, fin, wp) => `<div class="side ${id === m.b ? "r" : ""}"><div class="tn">${id === m.b ? "" : logoImg(T[id], "tlogo-s")}${tn(id)}${id === m.b ? logoImg(T[id], "tlogo-s r") : ""}</div><div class="rec">${T[id] ? esc(T[id].owner || "") : ""}</div>
       <div class="score" style="font-size:26px">${started ? f1(tot) : f1(fin)}</div><div class="proj">${started ? "verwacht " + f1(fin) : "projectie"} · ${Math.round(wp * 100)}%</div></div>`;
     return `<div class="panel" style="${mine ? "box-shadow: inset 3px 0 0 var(--mine-edge)" : ""}"><div class="mu">${side(m.a, m.aTotal, m.aFinal, m.aWin)}<div class="vs">${L.anyLive ? '<span class="livepill">Live</span>' : "VS"}</div>${side(m.b, m.bTotal, m.bFinal, 1 - m.aWin)}</div>
       <div class="wp"><div class="wp-bar" role="img" aria-label="Winkans"><i style="width:${m.aWin * 100}%;background:var(--series-1)"></i><i style="flex:1;background:var(--series-2)"></i></div></div></div>`;
   }).join("");
-  const rows = L.standings.map((t, i) => `<tr class="${t.id === me ? "mine" : ""} click" data-team="${t.id}"><td class="n muted">${i + 1}</td><td><div class="pn">${esc(t.name)}</div><div class="pm">${esc(t.owner || "")}</div></td><td class="n">${t.wins}-${t.losses}${t.ties ? "-" + t.ties : ""}</td><td class="n">${f1(t.pf)}</td><td class="n">${f1(t.pa)}</td><td class="n">${esc(t.streak || "")}</td></tr>`).join("");
+  const rows = L.standings.map((t, i) => `<tr class="${t.id === me ? "mine" : ""} click" data-team="${t.id}"><td class="n muted">${i + 1}</td><td><div class="pn">${logoImg(t, "tlogo-s")}${esc(t.name)}</div><div class="pm">${esc(t.owner || "")}</div></td><td class="n">${t.wins}-${t.losses}${t.ties ? "-" + t.ties : ""}</td><td class="n">${f1(t.pf)}</td><td class="n">${f1(t.pa)}</td><td class="n">${esc(t.streak || "")}</td></tr>`).join("");
   after(root => $$("[data-team]", root).forEach(tr => tr.onclick = () => { if (+tr.dataset.team !== me && confirm(`Bekijk de app als ${T[tr.dataset.team].name}?`)) switchTeam(+tr.dataset.team); }));
   return `<div class="grid g-side"><div class="stack"><h2 style="font-size:13px;margin:0">Matchups week ${L.week}</h2>${mu || `<div class="empty">Geen matchups gevonden.</div>`}</div>
     <div class="panel"><div class="panel-h"><h2>Stand</h2><span class="sub">klik op een team om de app als dat team te bekijken</span></div><div class="scroll"><table class="t"><thead><tr><th class="n">#</th><th>Team</th><th class="n">W-V</th><th class="n">Voor</th><th class="n">Tegen</th><th class="n">Reeks</th></tr></thead><tbody>${rows}</tbody></table></div></div></div>`;
@@ -831,6 +857,7 @@ async function viewLeague() {
 /* ================= TOEGANG & TEAMKEUZE ================= */
 function showGate(kind, msg) {
   S.state = null;
+  applyTeamTheme(null);
   document.body.classList.add("gated");
   const v = $("#view");
   $("#pageTitle").textContent = kind === "code" ? "Welkom" : "Kies je team";
@@ -849,7 +876,7 @@ function showGate(kind, msg) {
   } else {
     const teams = AUTH.teams || [];
     v.innerHTML = `<div class="gate panel" style="max-width:640px"><div class="panel-h"><h2>Welk team is van jou?</h2><span class="sub">${esc(AUTH.leagueName || "")}</span></div>
-      <ul class="inbox">${teams.map(t => `<li data-pick="${t.id}"><div class="ic" style="font-size:11px;font-weight:800">${esc((t.abbrev || t.name || "").slice(0, 2).toUpperCase())}</div><div><div class="subj">${esc(t.name)}</div><div class="body">${esc(t.owner || "")} · ${t.wins}-${t.losses}${t.ties ? "-" + t.ties : ""} · team-ID ${t.id}</div></div><div class="when">Kies →</div></li>`).join("")}</ul></div>`;
+      <ul class="inbox">${teams.map(t => `<li data-pick="${t.id}"><div class="ic${t.logo ? " logo" : ""}" style="font-size:11px;font-weight:800">${t.logo ? logoImg(t, "tlogo-m") : esc((t.abbrev || t.name || "").slice(0, 2).toUpperCase())}</div><div><div class="subj">${esc(t.name)}</div><div class="body">${esc(t.owner || "")} · ${t.wins}-${t.losses}${t.ties ? "-" + t.ties : ""} · team-ID ${t.id}</div></div><div class="when">Kies →</div></li>`).join("")}</ul></div>`;
     $$("[data-pick]", v).forEach(li => li.onclick = () => switchTeam(+li.dataset.pick));
   }
 }
