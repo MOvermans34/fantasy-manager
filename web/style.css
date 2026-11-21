@@ -335,3 +335,9 @@ footer.foot { color: var(--text-muted); font-size: 11.5px; margin-top: 22px; lin
 .gated .team-box, .gated .nav, .gated #refreshBtn { display: none; }
 .gate { max-width: 440px; margin: 40px auto; }
 @media (max-width: 900px) { .team-box { padding: 0 2px 8px; } .gate { margin: 16px auto; } }
+
+/* initialen van eigen spelers (scouting) */
+.pinits { display: inline-flex; gap: 4px; vertical-align: middle; margin-left: 4px; }
+.pinit { display: inline-grid; place-items: center; min-width: 26px; height: 22px; padding: 0 5px; border-radius: 99px; background: var(--div-pos-soft); color: var(--div-pos); font-size: 10.5px; font-weight: 800; letter-spacing: .02em; text-decoration: none; border: 1px solid transparent; }
+.pinit:hover { text-decoration: none; border-color: var(--div-pos); }
+@media (pointer: coarse) { .pinit { min-width: 30px; height: 26px; font-size: 11.5px; } }

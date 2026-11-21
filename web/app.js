@@ -73,7 +73,9 @@ setInterval(loadNews, 120000);
 
 /* ---------------- tooltip & thema ---------------- */
 const tip = $("#tip");
+const NO_HOVER = matchMedia("(hover: none)").matches;  // touchscreens: geen zwevende tooltips
 document.addEventListener("mouseover", e => {
+  if (NO_HOVER) return;
   const t = e.target.closest("[data-tip]");
   if (!t) { tip.style.opacity = 0; return; }
   tip.textContent = t.dataset.tip; tip.style.opacity = 1;
@@ -107,6 +109,13 @@ const myRoster = () => S.state.roster.map(P).filter(Boolean);
 const oppRoster = () => S.state.oppRoster.map(P).filter(Boolean);
 const W = () => S.state.meta.week;
 const short = n => (n || "").replace(/\s+(Jr\.?|Sr\.?|II|III|IV|V)$/i, "").split(" ").slice(-1)[0];
+/* Initialen: "C.J. Stroud" -> "CS", "Kenneth Walker III" -> "KW" */
+const initials = n => {
+  const parts = (n || "").replace(/\s+(Jr\.?|Sr\.?|II|III|IV|V)$/i, "").split(/\s+/).filter(Boolean);
+  return parts.length ? (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase() : "?";
+};
+/* Klikbare initialen-chips naar de spelerprofielen */
+const playerChips = ps => ps.map(p => `<a class="pinit" href="#/speler/${p.id}" onclick="event.stopPropagation()" title="${esc(p.name)} (${esc(p.pos)})" aria-label="${esc(p.name)}, ${esc(p.pos)}" data-tip="${esc(p.name)} · ${esc(p.pos)} · ${esc(p.slot || "")}">${esc(initials(p.name))}</a>`).join("");
 const isStarter = p => p.slot && !BENCH.includes(p.slot);
 
 const INJ = {
@@ -715,10 +724,11 @@ async function viewScouting(args) {
   if (!defs.length) return `<div class="empty">Analytics worden nog geladen…</div>`;
   const nT = S.state.analytics.nTeams || 32, L = S.state.analytics.league;
   const oppMap = {};
-  myRoster().filter(isStarter).forEach(p => { if (p.opp) (oppMap[p.opp] = oppMap[p.opp] || []).push(p); });
+  // eigen starters (geen D/ST: die speelt tegen de aanval, niet tegen deze defense)
+  myRoster().filter(p => isStarter(p) && p.pos !== "D/ST").forEach(p => { if (p.opp) (oppMap[p.opp] = oppMap[p.opp] || []).push(p); });
   const sortKey = S.ui.defSort || "epa_pass", asc = S.ui.defAsc ?? false;
   const cols = [
-    { k: "team", l: "Defense", v: d => d.team, f: d => `<span class="pn">${esc(d.team)}</span>${oppMap[d.team] ? ` <span class="chip pos" data-tip="${esc("Tegenstander van: " + oppMap[d.team].map(p => p.name).join(", "))}"><span class="dot"></span>${oppMap[d.team].length} van jou</span>` : ""}` },
+    { k: "team", l: "Defense", v: d => d.team, f: d => `<span class="pn">${esc(d.team)}</span>${oppMap[d.team] ? ` <span class="pinits">${playerChips(oppMap[d.team])}</span>` : ""}` },
     { k: "epa_pass", l: "EPA/db", v: d => d.epa_pass, f: d => rc(d, "epa_pass", sg(d.epa_pass)) },
     { k: "epa_rush", l: "EPA/car", v: d => d.epa_rush, f: d => rc(d, "epa_rush", sg(d.epa_rush)) },
     { k: "ypc", l: "YPC", v: d => d.ypc, f: d => rc(d, "ypc", f1(d.ypc)) },
