@@ -46,6 +46,10 @@ class Engine:
         self.web_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
         self.palette_path = os.path.join(data_dir, "palettes.json")
         self.palettes = self._load_palettes()
+        from .team_colors import TeamColorStore
+        os.makedirs(data_dir, exist_ok=True)
+        self.team_colors = TeamColorStore(f"{self.league_id or 'demo'}-{self.season}", data_dir,
+                                          cfg.get("database_url"), log=log)
         self.analytics_path = os.path.join(data_dir, f"analytics_{self.season}.json")
         try:
             self.analytics = AnalyticsResult.load(self.analytics_path)
@@ -204,8 +208,33 @@ class Engine:
             return {}
 
     def _palette_now(self, team):
+        """Volgorde: zelfgekozen kleuren > kleuren uit het logo > kleur op basis van de naam."""
         from .palette import fallback_palette
-        return self.palettes.get(team.get("logo") or "") or fallback_palette(team.get("name") or team["id"])
+        return (self.team_colors.palette(team["id"]) or self.palettes.get(team.get("logo") or "")
+                or fallback_palette(team.get("name") or team["id"]))
+
+    def color_options(self, tid):
+        from .team_colors import PRESETS, palette_for
+        with self.lock:
+            team = self.fantasy_teams.get(tid) or {}
+            logo_pal = self.palettes.get(team.get("logo") or "")
+            current = team.get("palette")
+        return {"teamId": tid, "teamName": team.get("name"), "current": current,
+                "chosen": bool(current and current.get("source") == "gekozen"),
+                "logo": logo_pal,
+                "presets": [{"id": i, "name": n, "primary": p, "secondary": sec, "palette": palette_for(p, sec)}
+                            for i, n, p, sec in PRESETS]}
+
+    def set_team_colors(self, tid, primary, secondary):
+        from .team_colors import palette_for
+        if not self.team_ok(tid):
+            raise ValueError("onbekend team")
+        self.team_colors.set(tid, primary, secondary)
+        pal = palette_for(primary, secondary)
+        with self.lock:
+            self.fantasy_teams[tid]["palette"] = pal
+        self.log(f"Teamkleuren: {self.fantasy_teams[tid].get('name')} koos {primary} / {secondary}.")
+        return pal
 
     def refresh_palettes(self):
         """Haal logo's op die nog geen palet hebben en bepaal hun kleuren."""

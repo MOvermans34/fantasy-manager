@@ -31,6 +31,10 @@ Een directe link naar een team kan ook: `https://jouw-adres/?team=3`. Met de kno
 - Zet altijd een `ACCESS_CODE`, anders kan iedereen met het adres je league zien.
 - Lekt de cookie toch uit, log dan uit op ESPN. Daarmee wordt `espn_s2` ongeldig, en daarna zet je de nieuwe waarde op de server.
 
+## Teamkleuren
+
+Iedereen krijgt de eerste keer dat hij de app opent een kleurkeuze voor zijn team: 12 kant-en-klare paletten, "uit mijn logo" of twee eigen kleuren, met een live voorbeeld in licht en donker thema. "Later" vraagt het opnieuw bij de volgende sessie, en via **Kleuren** in de zijbalk pas je het altijd aan. De app past de tinten automatisch aan zodat tekst leesbaar blijft (WCAG-contrast). De keuze geldt voor de hele league en staat in Postgres (tabel `team_colors`), of zonder database in `data/team_colors.json`.
+
 ## Online zetten op Render
 
 De repo bevat een `Dockerfile` en een Render Blueprint (`render.yaml`). Daarmee staat de app in ongeveer 10 minuten online.

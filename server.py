@@ -122,6 +122,14 @@ def make_handler(engine, access_code):
                 if what == "player" and len(parts) > 2:
                     out = engine.player_out(int(parts[2]), tid)
                     return self._json(out or {"error": "speler niet gevonden"}, 200 if out else 404)
+                if what == "colors":
+                    return self._json(engine.color_options(tid))
+                if what == "palette-preview":
+                    from ffd.team_colors import palette_for, valid_hex
+                    pri, sec = q.get("primary", [""])[0], q.get("secondary", [""])[0] or None
+                    if not valid_hex(pri) or (sec and not valid_hex(sec)):
+                        return self._json({"error": "ongeldige kleur"}, 400)
+                    return self._json(palette_for(pri, sec))
                 if what == "defense" and len(parts) > 2:
                     out = engine.defense_detail(parts[2])
                     return self._json(out or {"error": "nog niet beschikbaar"}, 200 if out else 404)
@@ -132,6 +140,18 @@ def make_handler(engine, access_code):
         def do_POST(self):
             if not self._authed():
                 return self._json({"error": "toegangscode onjuist"}, 401)
+            u = urlparse(self.path)
+            if u.path == "/api/team-colors":
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    if n <= 0 or n > 2048:
+                        return self._json({"error": "ongeldig verzoek"}, 400)
+                    body = json.loads(self.rfile.read(n))
+                    tid = int(parse_qs(u.query).get("team", ["0"])[0])  # strikt: geen standaardteam
+                    pal = engine.set_team_colors(tid, body.get("primary"), body.get("secondary"))
+                    return self._json({"ok": True, "teamId": tid, "palette": pal})
+                except (ValueError, json.JSONDecodeError) as e:
+                    return self._json({"error": str(e)}, 400)
             if self.path.startswith("/api/refresh"):
                 ok = engine.force_refresh()
                 return self._json({"ok": ok, "msg": None if ok else "Net ververst; probeer over een minuut opnieuw."})

@@ -46,7 +46,7 @@ async function loadState() {
     const analyticsChanged = S.state && S.state.analytics.ready !== s.analytics.ready;
     S.state = s;
     if (analyticsChanged) S.cache.player = {};
-    if (first) { loadLive(); loadNews(); }
+    if (first) { loadLive(); loadNews(); maybeAskColors(); }
     renderChrome();
     if (first || analyticsChanged || ["overzicht", "selectie", "vergelijken", "scouting"].includes(route().name)) render();
     if (!s.analytics.ready) setTimeout(loadState, 5000);
@@ -893,6 +893,7 @@ function renderTeamSel() {
   if (!sel.options.length) {
     sel.innerHTML = AUTH.teams.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join("");
     sel.onchange = () => switchTeam(+sel.value);
+    $("#colorBtn").onclick = () => openColorPicker(false);
     $("#shareBtn").onclick = async () => {
       const link = `${location.origin}/?team=${AUTH.team}`;
       try { await navigator.clipboard.writeText(link); setStatus("Link gekopieerd: " + link); } catch (e) { prompt("Kopieer deze link:", link); }
@@ -917,6 +918,95 @@ async function boot() {
     if (!valid) { AUTH.team = null; return showGate("team"); }
     switchTeam(AUTH.team);
   } catch (e) { if (!(e instanceof AuthError)) $("#view").innerHTML = `<div class="empty">Server niet bereikbaar (${esc(e.message)}).</div>`; }
+}
+
+/* ================= TEAMKLEUREN KIEZEN ================= */
+const HEXOK = v => /^#[0-9a-f]{6}$/i.test(v || "");
+function maybeAskColors() {
+  const t = S.state && S.state.meta.team;
+  if (!t || (t.palette && t.palette.source === "gekozen")) return;
+  let skipped = null;
+  try { skipped = sessionStorage.getItem("fm-colors-later-" + t.id); } catch (e) { }
+  if (!skipped) openColorPicker(true);
+}
+function previewHtml(p, name) {
+  if (!p || ![p.sidebar, p.sidebarActive, p.onSidebarActive, p.button, p.onButton, p.light.accent, p.dark.accent, p.light.mine, p.dark.mine].every(HEXOK)) return "";
+  const one = (m, bg, text, label) => `<div class="pv" aria-label="Voorbeeld ${label}">
+    <div class="sb" style="background:${p.sidebar}"><div class="nm">${esc(name || "Mijn team")}</div>
+      <div class="it on" style="background:${p.sidebarActive};color:${p.onSidebarActive}">Overzicht</div><div class="it">Selectie</div></div>
+    <div class="ct" style="background:${bg};color:${text}"><span class="small" style="opacity:.7">${label}</span>
+      <span class="lnk" style="color:${m.accent}">Wedstrijdcentrum →</span>
+      <span class="bt" style="background:${p.button};color:${p.onButton}">Opslaan</span>
+      <span class="rw" style="background:${m.mine};box-shadow:inset 3px 0 0 ${m.accent}">Jouw speler</span></div></div>`;
+  return one(p.light, "#fcfcfb", "#0b0b0b", "Licht thema") + one(p.dark, "#181c22", "#f0efec", "Donker thema");
+}
+async function openColorPicker(firstTime) {
+  if ($("#colorModal")) return;
+  let opt;
+  try { opt = await api("/api/colors"); } catch (e) { return; }
+  const cur = opt.current && opt.current.source === "gekozen" ? opt.current : null;
+  const choices = [...(opt.logo ? [{ id: "logo", name: "Uit mijn logo", primary: opt.logo.primary, secondary: opt.logo.secondary, palette: opt.logo }] : []), ...opt.presets];
+  const first = opt.presets[0];
+  const sel = { primary: (cur && cur.chosenPrimary) || first.primary, secondary: (cur && cur.chosenSecondary) || first.secondary,
+                palette: cur || first.palette, key: cur ? "custom" : first.id };
+  if (cur) { const m = choices.find(x => x.primary === cur.chosenPrimary && x.secondary === cur.chosenSecondary); if (m) sel.key = m.id; }
+  const modal = document.createElement("div");
+  modal.className = "modal-bg"; modal.id = "colorModal";
+  modal.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="cmTitle">
+    <div class="modal-h"><h2 id="cmTitle">${firstTime ? "Kies je teamkleuren" : "Teamkleuren aanpassen"}</h2>
+      <p>${esc(opt.teamName || "")}: je kleuren zie je in de zijbalk, bij knoppen en links, en bij je team in het League-scherm. Iedereen in de league ziet ze. De app past de tinten automatisch aan, zodat tekst altijd goed leesbaar blijft.</p></div>
+    <div class="modal-b">
+      <div class="sec-t">Kant-en-klaar</div>
+      <div class="presets">${choices.map(c => `<button type="button" class="preset" data-key="${esc(c.id)}" aria-pressed="${c.id === sel.key}"><span class="sw2"><i style="background:${HEXOK(c.primary) ? c.primary : "#888"}"></i><i style="background:${HEXOK(c.secondary) ? c.secondary : "#888"}"></i></span>${esc(c.name)}</button>`).join("")}</div>
+      <div class="sec-t">Of kies zelf</div>
+      <div class="custom"><label>Hoofdkleur <input type="color" id="cmP" value="${esc(sel.primary)}"></label><label>Tweede kleur <input type="color" id="cmS" value="${esc(sel.secondary || "#141414")}"></label></div>
+      <div class="sec-t">Voorbeeld</div>
+      <div class="previews" id="cmPrev">${previewHtml(sel.palette, opt.teamName)}</div>
+    </div>
+    <div class="modal-f"><button type="button" class="btn" id="cmLater">${firstTime ? "Later" : "Annuleren"}</button><button type="button" class="btn primary" id="cmSave">Opslaan</button></div></div>`;
+  document.body.appendChild(modal);
+  const prev = $("#cmPrev", modal);
+  const markPressed = () => $$(".preset", modal).forEach(b => b.setAttribute("aria-pressed", String(b.dataset.key === sel.key)));
+  $$(".preset", modal).forEach(b => b.onclick = () => {
+    const c = choices.find(x => x.id === b.dataset.key);
+    Object.assign(sel, { primary: c.primary, secondary: c.secondary, palette: c.palette, key: c.id });
+    $("#cmP", modal).value = c.primary; $("#cmS", modal).value = c.secondary || "#141414";
+    markPressed(); prev.innerHTML = previewHtml(sel.palette, opt.teamName);
+  });
+  let timer;
+  const onCustom = () => {
+    sel.primary = $("#cmP", modal).value; sel.secondary = $("#cmS", modal).value; sel.key = "custom"; markPressed();
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      try {
+        sel.palette = await api(`/api/palette-preview?primary=${encodeURIComponent(sel.primary)}&secondary=${encodeURIComponent(sel.secondary)}`);
+        prev.innerHTML = previewHtml(sel.palette, opt.teamName);
+      } catch (e) { }
+    }, 150);
+  };
+  $("#cmP", modal).oninput = onCustom; $("#cmS", modal).oninput = onCustom;
+  const close = () => { modal.parentNode && modal.parentNode.removeChild(modal); document.removeEventListener("keydown", onKey); };
+  const later = () => { if (firstTime) { try { sessionStorage.setItem("fm-colors-later-" + opt.teamId, "1"); } catch (e) { } } close(); };
+  const onKey = e => { if (e.key === "Escape") later(); };
+  document.addEventListener("keydown", onKey);
+  modal.addEventListener("click", e => { if (e.target === modal) later(); });
+  $("#cmLater", modal).onclick = later;
+  $("#cmSave", modal).onclick = async () => {
+    const btn = $("#cmSave", modal); btn.disabled = true; btn.textContent = "Opslaan…";
+    try {
+      const r = await api("/api/team-colors", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                 body: JSON.stringify({ primary: sel.primary, secondary: sel.secondary }) });
+      if (S.state) {
+        S.state.meta.team.palette = r.palette;
+        if (S.state.fantasyTeams[r.teamId]) S.state.fantasyTeams[r.teamId].palette = r.palette;
+      }
+      const t = (AUTH.teams || []).find(x => x.id === r.teamId); if (t) t.palette = r.palette;
+      applyTeamTheme(S.state ? S.state.meta.team : null);
+      close(); setStatus("Teamkleuren opgeslagen");
+      if (route().name === "league") render();
+    } catch (e) { btn.disabled = false; btn.textContent = "Opslaan"; alert("Opslaan mislukt: " + e.message); }
+  };
+  setTimeout(() => { const f = $(".preset[aria-pressed=true]", modal) || $(".preset", modal); if (f) f.focus(); }, 30);
 }
 
 /* ---------------- start ---------------- */
